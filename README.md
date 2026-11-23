@@ -6,9 +6,13 @@ REFLOW is a scrolling web exhibition in seven plates. Each plate takes a piece o
 
 The project is a creative frontend experiment in **computational typography**: text is measured, positioned and reflowed at runtime around arbitrary shapes, with scroll progress driving the motion of every element.
 
+It asks a simple question — *what happens to a sentence when a body enters the frame?* — and answers it in code: the paragraph is never cut or faded out. It is re-set around the obstacle, line by line, using the free intervals the shape leaves behind.
+
+**Role:** design and engineering, solo build.
+
 ---
 
-## 🟢 Live Demo
+## Live Demo
 
 **The exhibition is deployed and publicly accessible.**
 
@@ -22,6 +26,8 @@ The project is a creative frontend experiment in **computational typography**: t
 ---
 
 ## Preview
+
+Screenshots are captured from the production build at 1440×900 with `scripts/shoot.mjs` (headless Chrome via the DevTools Protocol), not mocked up.
 
 ![Plate 01 — The Specimen](docs/screenshots/plate-01-specimen.png)
 
@@ -64,9 +70,11 @@ A colophon leaf closes the exhibition and carries the author's signature, set by
 - **Scroll-driven composition.** A rAF-throttled hook maps each section's scroll progress to `0..1`, exposing it both as a CSS variable (`--p`) and as React state.
 - **Fixed reading interface.** A chrome rail tracks the active plate by viewport midpoint, shows scroll percentage, and supports hash-based deep links with smooth scrolling (auto when reduced motion is requested).
 - **Web-font-aware measurement.** The canvas measure cache is cleared and text is re-measured when `document.fonts` settles, so a late font swap cannot leave words overlapping.
-- **Responsive adaptation.** Layouts recompute through `ResizeObserver`; font sizes adjust for narrow measures (e.g. Scene 03).
+- **Responsive adaptation.** Layouts recompute through `ResizeObserver`; type sizes and the silhouette scale adjust to the container (Plate 03 drops to 15px body type on narrow measures). The exhibition is art-directed for desktop first — the densest plates are tighter on a phone than on a wide screen.
 - **Reduced-motion support.** `prefers-reduced-motion` is respected by the signature animation and the chrome's scroll behaviour.
 - **Accessibility basics.** Sections are labelled, the navigation is keyboard reachable, and decorative layers carry `aria-hidden`.
+
+All of the above are implemented in the repository. The quieter, more experimental behaviours — a per-glyph signature that lets a dot pass through a name, and the ink-misregistration layer in Plate 03 — are built but deliberately understated; they are compositions, not separate product features. Nothing in this README is a claim about unbuilt work.
 
 ---
 
@@ -82,10 +90,10 @@ A colophon leaf closes the exhibition and carries the author's signature, set by
 - **Framework:** React 18
 - **Build tool:** Vite 6
 - **Styling:** Plain CSS with custom properties (no CSS framework, no component library)
-- **Testing:** Vitest in a jsdom environment
-- **Fonts:** Oswald, Instrument Serif, Bodoni Moda, Space Grotesk, IBM Plex Mono, Archivo Narrow (Google Fonts)
+- **Testing:** Vitest in a jsdom environment (10 unit tests over the geometry and typography engines)
+- **Type stacks:** Oswald and Archivo Narrow (condensed), Instrument Serif and Bodoni Moda (serif), Space Grotesk (grotesque), IBM Plex Mono (mono) — loaded from Google Fonts
 - **Deployment:** Vercel (static build)
-- **Runtime services:** None
+- **Runtime services:** None — no API keys, no environment variables, no backend
 
 ---
 
@@ -118,7 +126,7 @@ For each line, the engine walks the available slots left to right, placing words
 
 ### 4. Scroll drives everything
 
-`useScrollProgress` computes a normalised progress value from the section's `getBoundingClientRect` and its height relative to the viewport. It writes `--p` to the section element and throttles React state updates to changes above `0.0015`. Scenes read `progress` and map it through eased ramps (`ss`, `range`) into transforms, opacity and clip-paths.
+`useScrollProgress` computes a normalised progress value from the section's `getBoundingClientRect` and its height relative to the viewport. It writes `--p` to the section element and throttles React state updates to changes above `0.0015`. Scenes read `progress` and map it through eased ramps (`ss`, `range`) into transforms, opacity and clip-paths. Plate 03 is the clearest case: the figure's centre is driven by `W * (0.9 - 0.72 * ss(p, 0.05, 0.95))`, and the paragraph is re-laid out at every step of that traversal.
 
 ### 5. Rendering
 
@@ -188,40 +196,52 @@ Core implementation lives in `src/lib/geometry.ts` and `src/lib/typography.ts`, 
 ## What I Learned
 
 ### Dynamic text layout
-- Measuring text with the Canvas API (`measureText`) and why a cached fallback metric becomes wrong after a web font swaps in.
-- Treating text as tokens that must be fitted into variable-width intervals instead of a fixed column.
-- Breaking long words at grapheme boundaries so a single long token cannot overflow the measure.
-- Keeping words whole in paragraph mode while allowing per-glyph layout when a shape must split a single word.
-- Aligning groups per slot (left, centre, right, justify) and not justifying the last line.
+- Measuring text with the Canvas API (`measureText`) and building a keyed cache (`family|size|weight|letterSpacing|text`) with a size cap, instead of re-measuring every word on every scroll frame.
+- Treating text as tokens that must be fitted into variable-width intervals instead of flowing into a fixed column.
+- Why a cache becomes *wrong* rather than merely stale when a web font swaps in: the fallback face's advance widths are cached under the same key, so layout has to be invalidated, not just recomputed.
+- Adding `letterSpacing` to the canvas context so measured widths match what CSS renders.
+- Breaking long words at grapheme boundaries (`Array.from(word)`, not `split('')`) so a single token cannot overflow the measure.
+- Choosing a minimum slot width as a function of font size — `2.6em` for whole words, `0.5em` for glyphs — to stop orphan words from being placed in slivers beside a silhouette.
+- Aligning groups per slot (left, centre, right, justify), justifying only non-final lines, and re-distributing free space between words rather than stretching glyphs.
 
 ### Browser rendering and layout
-- Using `ResizeObserver` to recompute layout when the container changes, rather than listening to `resize` alone.
-- Combining DOM measurement (`getBoundingClientRect`, `clientWidth`) with React state carefully to avoid layout thrash.
-- Writing positions directly to the DOM inside animation loops, and gating that work behind an `IntersectionObserver`.
-- Clearing and rebuilding a measurement cache in response to font-loading events.
+- Using `ResizeObserver` on the text stage so layout follows the element's own box, not just the window.
+- Reading `clientWidth`/`getBoundingClientRect` once per frame in a rAF callback, and keeping measurement out of React's render phase.
+- Writing glyph positions straight to `style.transform` inside the signature loop and skipping unchanged positions with a quantised key — an escape hatch from React's render cycle for high-frequency updates.
+- Gating animation with `IntersectionObserver` (`rootMargin: '12% 0px'`) so off-screen plates cost nothing.
+- Recognising that this layout is *manual* typesetting: the browser's own line-breaking is bypassed, so every word's x/y is computed and no CSS `text-wrap` behaviour applies.
 
 ### Scroll-driven interactions
-- Mapping scroll position to a normalised `0..1` progress value per section.
-- Throttling state updates with a small epsilon so React does not re-render on every pixel of scroll.
-- Using `requestAnimationFrame` for scroll handlers and `{ passive: true }` listeners.
-- Easing ramps (`smoothstep`, `range`, `clamp`, `lerp`) to turn linear progress into motion with weight.
-- Keeping CSS transforms and clip-paths on the compositor-friendly properties.
+- Mapping scroll position to a normalised `0..1` value per section: `p = -rect.top / (rect.height - innerHeight)`, clamped.
+- Publishing progress as a CSS custom property (`--p`) as well as React state, so CSS and JS can read the same value.
+- Throttling: one rAF per scroll burst, plus an epsilon (`0.0015`) on state so React re-renders only when progress visibly changes.
+- Using `{ passive: true }` scroll listeners so the browser never waits on the handler for scrolling.
+- Easing ramps (`smoothstep`, `range`, `clamp`, `lerp`) so linear scroll produces motion with weight and settles at both ends.
+- Coordinating a pinned section: each plate is `250vh`–`330vh` tall while `.scene__stage` is `position: sticky; top: 0; height: 100vh`, so the composition stays on screen while progress advances.
 
 ### Animation and interaction
-- Coordinating many elements (transforms, opacity, clip-path) from a single progress value.
-- Damped motion for the signature dot so it has mass and settles after scrolling stops.
-- Respecting `prefers-reduced-motion` by switching to a static composition.
+- Coordinating many elements (transforms, opacity, `clip-path`, background position, letter-spacing) from a single progress value, so the whole plate stays in sync by construction.
+- Damped follow for the signature dot (`shown += (target - shown) * 0.06`), which gives it mass and lets it come to rest after scrolling stops.
+- Second-order drift (`sin`/`cos` on elapsed time) layered on top of the scroll-driven position, so the mark never looks mechanically frozen.
+- Compositor-friendly properties: `translate3d`, `scale`, `rotate`, `opacity` and `clip-path`, with the CSS transition explicitly disabled on JS-owned values so the two never fight.
+- Respecting `prefers-reduced-motion` by switching to a composed static signature and disabling smooth scrolling.
 
 ### Responsive design
-- Recomputing font sizes and layout for narrow measures.
-- Re-running layout automatically when the container width changes.
-- Maintaining readable typography while the composition scales.
+- Recomputing font size from the container width (`clamp(w * 0.24, 44, 150)` for the signature) rather than media queries alone.
+- Scaling a fixed 30-vertex silhouette to the stage height (`H * 0.98 / FIGURE_HEIGHT`) so the figure keeps its proportions on any viewport.
+- Falling back from `22px` to `15px` body type below a `520px` measure in Plate 03, where a desktop size would run past the stage.
+- Re-running the whole layout automatically on width change, and using `stageHeight` to keep the stage's reserved height stable while text reflows.
+- Handling the case where fonts, not the viewport, are what changed — the layout is also keyed on a `fontEpoch` counter.
 
 ### Debugging and problem-solving
-- A glyph line only clearing an obstacle on its baseline left descenders colliding with the shape; fixed by sampling several heights across the line box.
-- Late font loading leaving words slightly overlapped; fixed by re-measuring on `document.fonts.ready` and `loadingdone`.
-- A word wider than every slot stalling the layout; fixed by finalising the line and retrying on the next one.
-- Avoiding per-frame React renders in the signature by mutating span transforms directly.
+- **Descenders colliding with the silhouette.** A single baseline sample lets the bottom of a line clip a shape, so the implementation samples five heights across the line box (`y + 1`, `25%`, `50%`, `75%`, `y + lh - 1`) and unions the obstructed intervals — conservative, so the text clears the figure at every height.
+- **A line that cannot make progress.** If every slot was too narrow, the fitting loop could spin. Fixed by detecting no-progress iterations and advancing one line height, with a guard counter as a backstop.
+- **Late web fonts overlapping words.** Text measured against fallback metrics stayed at those positions after the real face loaded. Fixed by clearing the cache and bumping `fontEpoch` on `document.fonts.ready` and the `loadingdone` event.
+- **Orphan words beside a shape.** Allowing any positive slot produced single words stacked in slivers. Fixed with a font-size-relative minimum slot width.
+- **Justified last lines.** Justification looked broken on a final line, so it is excluded by an `isLastLine` flag.
+- **Testing layout without a browser.** The canvas is mocked in `src/test/setup.ts` with deterministic width maths, which makes pure geometry and wrapping logic testable in jsdom.
+
+What this changed in how I work: I now treat text layout as an algorithm with inputs, invariants and failure cases — and I test the engine separately from the composition that uses it.
 
 ---
 
@@ -231,7 +251,7 @@ Core implementation lives in `src/lib/geometry.ts` and `src/lib/typography.ts`, 
 - Additional obstacle types and animated shapes that move independently of scroll.
 - Touch-specific interaction modes and mobile-first layout recalculations.
 - Further performance work during continuous scrolling (profiling and memoisation of shape sampling).
-- Accessibility improvements: keyboard navigation between plates, screen-reader-friendly reading order, focus management.
+- Accessibility improvements: full keyboard traversal of the exhibition, focus management when plates change, and a linear screen-reader reading order for the composed text.
 - Additional plates exploring other typographic behaviours.
 
 ---
@@ -247,10 +267,24 @@ Core implementation lives in `src/lib/geometry.ts` and `src/lib/typography.ts`, 
 - React, TypeScript and Vite
 - Responsive, reduced-motion-aware UI
 - Unit testing pure layout logic with Vitest
+- Scroll progress mapping and eased interpolation
+- `prefers-reduced-motion` and basic ARIA hygiene
 - Static deployment on Vercel
+
+---
+
+## Verification
+
+- `npm test` — 10 tests across `geometry.test.ts` and `typography.test.ts` pass.
+- `npm run typecheck` — TypeScript strict mode passes.
+- `npm run build` — production build succeeds (`dist/`).
+- Live deployment returns `HTTP 200` from Vercel at https://reflow-wow.vercel.app/ with title `REFLOW — The Physical Behaviour of Language`.
+- README screenshots are committed under `docs/screenshots/` and are captured from this codebase.
+
+_Not verified:_ Vercel preview deployments and any custom-domain configuration, since no `vercel.json` or domain configuration exists in the repository.
 
 ---
 
 ## Colophon
 
-Designed and built by Likhit Choudhary. Typefaces in use are Oswald, Instrument Serif, Bodoni Moda, Space Grotesk, IBM Plex Mono and Archivo Narrow, served from Google Fonts. Imagery is original two-ink duotones.
+Designed and built by Likhit Choudhary. Type stacks include Oswald and Archivo Narrow, Instrument Serif and Bodoni Moda, Space Grotesk, and IBM Plex Mono, served from Google Fonts. Imagery is original two-ink duotones.
